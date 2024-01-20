@@ -59,7 +59,7 @@ Setting up Windows nodes for Ansible is a bit more involved since Ansible uses W
 
 Run this script on your Windows nodes as an administrator. It will configure WinRM with sensible defaults that work well with Ansible.
 
-PowerShell script provided by Ansibl 
+PowerShell script provided by Ansible
 
 $url = "https://raw.githubusercontent.com/ansible/ansible/devel/examples/scripts/ConfigureRemotingForAnsible.ps1"
 $file = "$env:temp\ConfigureRemotingForAnsible.ps1"
