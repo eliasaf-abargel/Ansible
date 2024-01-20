@@ -1,0 +1,228 @@
+---
+  -  hosts: localhost
+     vars_prompt:
+      - name: "username"
+        prompt: "Enter UserName"
+        private: no
+      - name: "password"
+        prompt: "Enter Password"
+        private: yes
+     
+     vars:
+        login: &login
+          hostname: "{{ host.ip }}"
+          username: "{{ username }}"
+          password: "{{ password }}"
+          https: true
+          validate_certs: false
+     vars_files:
+      - volumeEdit_variable.yaml
+     collections:
+      - netapp.ontap
+     tasks:
+      - name: Rename Volume
+        when: UserInputs.name is defined
+        na_ontap_volume:
+          state: present
+          from_name: "{{ volume.name }}"
+          name: "{{ UserInputs.name }}"
+          vserver: "{{ svm.name }}"
+          <<: *login
+        
+      - set_fact: 
+          volumeName: "{{  UserInputs.name if (UserInputs.name is defined) else volume.name }}"
+          
+      - name: Resize Volume
+        when: UserInputs.size is defined
+        na_ontap_volume:
+         state: present
+         name: "{{ volumeName }}"
+         vserver: "{{ svm.name }}"
+         sizing_method:  "{{ UserInputs.sizing_method  | default(omit) }}"
+         size:  "{{UserInputs.size}}"
+         size_unit: "{{  (UserInputs.size_unit | lower) if (UserInputs.size_unit is defined) else 'gb' }}"
+         <<: *login
+         
+      - name: Thin Provisioning
+        when: UserInputs.guarantee is defined and UserInputs.guarantee.type is defined
+        na_ontap_volume:
+          state: present
+          name: "{{ volumeName }}"
+          vserver: "{{ svm.name }}"
+          space_guarantee : "{{UserInputs.guarantee.type}}"
+          <<: *login
+          
+      - name: Modify tiering policy
+        when: UserInputs.tiering is defined and UserInputs.tiering.policy is defined
+        na_ontap_volume:
+          state: present
+          name: "{{ volumeName }}"
+          vserver: "{{ svm.name }}"
+          tiering_policy  : "{{UserInputs.tiering.policy}}"
+          <<: *login
+          
+      - name: Encrypt volume
+        when: UserInputs.encryption is defined and UserInputs.encryption.enabled is defined
+        na_ontap_volume:
+          state: present
+          name: "{{ volumeName }}"
+          vserver: "{{ svm.name }}"
+          encrypt   : "{{UserInputs.encryption.enabled}}"
+          <<: *login
+          
+      - name: Modify volume autogrow
+        when: UserInputs.autosize is defined and (UserInputs.autosize.mode is defined or UserInputs.autosize.maximum is defined or UserInputs.autosize.minimum is defined )
+        na_ontap_volume_autosize:
+         volume: "{{ volumeName }}"
+         vserver: "{{ svm.name }}"
+         mode: "{{ UserInputs.autosize.mode  | default(omit) }}"
+         maximum_size: "{{ UserInputs.autosize.maximum  | default(omit) }}"
+         minimum_size: "{{ UserInputs.autosize.minimum  | default(omit) }}"
+         <<: *login
+          
+      - name: Modify Unix permission and security style
+        when: UserInputs.nas is defined and (UserInputs.nas.security_style is defined or UserInputs.nas.unix_permissions is defined or UserInputs.nas.path is defined )
+        na_ontap_volume:
+          state: present
+          name: "{{ volumeName }}"
+          vserver: "{{ svm.name }}"
+          unix_permissions: "{{ UserInputs.nas.unix_permissions  | default(omit) }}"
+          volume_security_style: "{{ UserInputs.nas.security_style | default(omit) }}"
+          <<: *login
+      - name: remove mount path 
+        when: UserInputs.nas is defined and UserInputs.nas.path is defined 
+        na_ontap_volume:
+          state: present
+          name: "{{ volumeName }}"
+          vserver: "{{ svm.name }}"
+          junction_path: ""
+          <<: *login
+      - name: set mount path 
+        when: UserInputs.nas is defined and UserInputs.nas.path is defined 
+        na_ontap_volume:
+          state: present
+          name: "{{ volumeName }}"
+          vserver: "{{ svm.name }}"
+          junction_path: "{{ UserInputs.nas.path  | default(omit) }}"
+          <<: *login
+      - name: Create a new Export Policy
+        when: UserInputs.nas is defined and UserInputs.nas.export_policy is defined and UserInputs.nas.export_policy.name is defined 
+        na_ontap_export_policy:
+          state: present
+          name: "{{ UserInputs.nas.export_policy.name }}"
+          vserver: "{{ svm.name }}"
+          <<: *login
+      - name: add export policy rules
+        when: UserInputs.nas is defined and UserInputs.nas.export_policy is defined and UserInputs.nas.export_policy.name is defined and UserInputs.nas.export_policy.rules is defined
+        na_ontap_export_policy_rule:
+          state: present
+          name: "{{ UserInputs.nas.export_policy.name }}"
+          vserver: "{{ svm.name }}"
+          client_match: "{{(item.client_match|default([]))}}"
+          ro_rule: "{{(item.ro_rule|default([]))}}"
+          rw_rule: "{{(item.rw_rule|default([]))}}"
+          protocol: "{{(item.protocols|default([]))}}"
+          super_user_security: "{{(item.superuser|default([]))}}"
+          allow_suid: true
+          <<: *login
+        with_items:
+           " {{ UserInputs.nas.export_policy.rules if (UserInputs.nas is defined and UserInputs.nas.export_policy is defined and UserInputs.nas.export_policy.name is defined and UserInputs.nas.export_policy.rules is defined) else [] }}"
+          
+      - name: modify Export Policy
+        when: UserInputs.nas is defined and UserInputs.nas.export_policy is defined and UserInputs.nas.export_policy.name is defined 
+        na_ontap_volume:
+          state: present
+          name: "{{ volumeName }}"
+          policy: "{{ UserInputs.nas.export_policy.name }}"
+          vserver: "{{ svm.name }}"
+          <<: *login
+                
+      - name: Modify Snapshot Policy
+        when: UserInputs.snapshot_policy is defined and UserInputs.snapshot_policy.name is defined
+        na_ontap_volume:
+          state: present
+          name: "{{ volumeName }}"
+          vserver: "{{ svm.name }}"
+          snapshot_policy: "{{ UserInputs.snapshot_policy.name }}"
+          <<: *login
+          
+      - name: Modify volume with snapshot auto delete options and snap reserve
+        when: UserInputs.space is defined and UserInputs.space.snapshot is defined and (UserInputs.space.snapshot.reserve_percent is defined or UserInputs.space.snapshot.autodelete_enabled is defined )
+        na_ontap_volume:
+         state: present
+         name: "{{ volumeName }}"
+         vserver: "{{ svm.name }}"
+         snapshot_auto_delete:
+          state: "{{ UserInputs.space.snapshot.autodelete_enabled | default(omit) }}"
+         percent_snapshot_space : "{{ UserInputs.space.snapshot.reserve_percent | default(omit) }}"
+         <<: *login
+      - set_fact: 
+          maxThroughput: "{{ UserInputs.qos.policy.fixed.max_throughput_mbps + 'MB/s'  if((UserInputs.qos.policy.fixed.max_throughput_mbps | default('', true) | trim != '') and UserInputs.qos.policy.fixed.max_throughput_mbps != '0') else ''}}{{',' if ((UserInputs.qos.policy.fixed.max_throughput_mbps | default('', true) | trim != '') and UserInputs.qos.policy.fixed.max_throughput_mbps != '0') and ((UserInputs.qos.policy.fixed.max_throughput_iops | default('', true) | trim != '') and UserInputs.qos.policy.fixed.max_throughput_iops != '0') else ''}}{{UserInputs.qos.policy.fixed.max_throughput_iops + 'iops'  if((UserInputs.qos.policy.fixed.max_throughput_iops | default('', true) | trim != '') and UserInputs.qos.policy.fixed.max_throughput_iops != '0') else '' }}"
+          minThroughput: "{{ UserInputs.qos.policy.fixed.min_throughput_mbps + 'MB/s'  if((UserInputs.qos.policy.fixed.min_throughput_mbps | default('', true) | trim != '') and UserInputs.qos.policy.fixed.min_throughput_mbps != '0') else ''}}{{',' if ((UserInputs.qos.policy.fixed.min_throughput_mbps | default('', true) | trim != '') and UserInputs.qos.policy.fixed.min_throughput_mbps != '0') and ((UserInputs.qos.policy.fixed.min_throughput_iops | default('', true) | trim != '') and UserInputs.qos.policy.fixed.min_throughput_iops != '0') else ''}}{{UserInputs.qos.policy.fixed.min_throughput_iops + 'iops'  if((UserInputs.qos.policy.fixed.min_throughput_iops | default('', true) | trim != '') and UserInputs.qos.policy.fixed.min_throughput_iops != '0') else '' }}"
+     
+      - name: Create or modify qos policy
+        when: UserInputs.qos is defined and UserInputs.qos.policy is defined and UserInputs.qos.policy.name is defined and UserInputs.qos.policy.name != 'none' and (UserInputs.qos.policy.adaptive is not defined  or UserInputs.qos.policy.adaptive != true) and  UserInputs.qos.policy.name != 'extreme-fixed' and  UserInputs.qos.policy.name != 'value-fixed' and  UserInputs.qos.policy.name != 'performance-fixed'
+        na_ontap_qos_policy_group:
+         state: present
+         name: "{{ UserInputs.qos.policy.name }}"
+         vserver: "{{ svm.name }}"
+         max_throughput: "{{ omit if( maxThroughput == '') else maxThroughput  }}"
+         min_throughput: "{{ omit if( minThroughput == '') else minThroughput}}"
+         is_shared: "{{ UserInputs.qos.policy.fixed.capacity_shared | default(omit)}}"
+         <<: *login
+        
+      - name: set qos policy
+        when: UserInputs.qos is defined and UserInputs.qos.policy is defined and UserInputs.qos.policy.name is defined and (UserInputs.qos.policy.adaptive is not defined  or UserInputs.qos.policy.adaptive != true) and UserInputs.qos.policy.name != 'none'
+        na_ontap_volume:
+         state: present
+         name: "{{ volumeName }}"
+         vserver: "{{ svm.name }}"
+         qos_policy_group : "{{UserInputs.qos.policy.name }}"
+         <<: *login
+      - name: set  adaptive qos policy
+        when: UserInputs.qos is defined and UserInputs.qos.policy is defined and UserInputs.qos.policy.name is defined and (UserInputs.qos.policy.adaptive is defined and UserInputs.qos.policy.adaptive == true) and UserInputs.qos.policy.name != 'none'
+        na_ontap_volume:
+         state: present
+         name: "{{ volumeName }}"
+         vserver: "{{ svm.name }}"
+         qos_adaptive_policy_group  : "{{UserInputs.qos.policy.name }}"
+         <<: *login
+
+      - name: Unset qos policy
+        when: UserInputs.qos is defined and UserInputs.qos.policy is defined and UserInputs.qos.policy.name is defined and UserInputs.qos.policy.name == 'none'
+        na_ontap_volume:
+         state: present
+         name: "{{ volumeName }}"
+         vserver: "{{ svm.name }}"
+         qos_policy_group : "{{UserInputs.qos.policy.name }}"
+         <<: *login
+
+      - name: Unset adaptive qos policy
+        when: UserInputs.qos is defined and UserInputs.qos.policy is defined and UserInputs.qos.policy.name is defined and UserInputs.qos.policy.name == 'none'
+        na_ontap_volume:
+         state: present
+         name: "{{ volumeName }}"
+         vserver: "{{ svm.name }}"
+         qos_adaptive_policy_group  : "{{UserInputs.qos.policy.name }}"
+         <<: *login
+
+      - name: modify quota status
+        when: UserInputs.quota.enabled is defined 
+        na_ontap_quotas:
+         state: present
+         vserver: "{{ svm.name }}"
+         volume: "{{ volumeName }}"
+         set_quota_status: "{{ UserInputs.quota.enabled }}"
+         <<: *login
+      - name: modify storage efficiency
+        when: UserInputs.efficiency is defined
+        na_ontap_volume_efficiency:
+         state: "{{'absent' if(UserInputs.efficiency.state is defined and UserInputs.efficiency.state == 'disabled') else 'present'   }}"
+         vserver: "{{ svm.name }}"
+         path: "{{'/vol/'+volumeName}}"
+         policy: "{{ UserInputs.efficiency.efficiency_policy | default(omit)}}"
+         enable_compression: "{{ UserInputs.efficiency.compression | default(omit)}}"
+         enable_inline_compression: "{{ UserInputs.efficiency.inline_compression | default(omit)}}"
+         <<: *login       
+          
+      
